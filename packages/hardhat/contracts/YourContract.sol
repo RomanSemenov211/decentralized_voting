@@ -1,78 +1,96 @@
-//SPDX-License-Identifier: MIT
+// SPDX-License-Identifier: MIT
 pragma solidity >=0.8.0 <0.9.0;
 
-// Useful for debugging. Remove when deploying to a live network.
+// Useful for debugging on local networks (hardhat). Remove for production.
 import "hardhat/console.sol";
 
-// Use openzeppelin to inherit battle-tested implementations (ERC20, ERC721, etc)
-// import "@openzeppelin/contracts/access/Ownable.sol";
-
 /**
- * A smart contract that allows changing a state variable of the contract and tracking the changes
- * It also allows the owner to withdraw the Ether in the contract
- * @author BuidlGuidl
+ * YourContract — простая система децентрализованного голосования.
+ * - Именованный массив кандидатов (name, voteCount)
+ * - Голосовать может любой адрес, но только 1 раз
+ * - Владелец (deployer) может добавлять кандидатов
+ * - Голосование ограничено по времени (start / end)
  */
 contract YourContract {
-    // State Variables
-    address public immutable owner;
-    string public greeting = "Building Unstoppable Apps!!!";
-    bool public premium = false;
-    uint256 public totalCounter = 0;
-    mapping(address => uint) public userGreetingCounter;
-
-    // Events: a way to emit log statements from smart contract that can be listened to by external parties
-    event GreetingChange(address indexed greetingSetter, string newGreeting, bool premium, uint256 value);
-
-    // Constructor: Called once on contract deployment
-    // Check packages/hardhat/deploy/00_deploy_your_contract.ts
-    constructor(address _owner) {
-        owner = _owner;
+    struct Candidate {
+        string name;
+        uint256 voteCount;
     }
 
-    // Modifier: used to define a set of rules that must be met before or after a function is executed
-    // Check the withdraw() function
-    modifier isOwner() {
-        // msg.sender: predefined variable that represents address of the account that called the current function
-        require(msg.sender == owner, "Not the Owner");
+    Candidate[] public candidates;
+    address public owner;
+    mapping(address => bool) public voters;
+
+    uint256 public votingStart;
+    uint256 public votingEnd;
+
+    event CandidateAdded(string name);
+    event VoteCast(address indexed voter, uint256 indexed candidateIndex);
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not the owner");
         _;
     }
 
     /**
-     * Function that allows anyone to change the state variable "greeting" of the contract and increase the counters
-     *
-     * @param _newGreeting (string memory) - new greeting to save on the contract
+     * @param _candidateNames - начальный список кандидатов
+     * @param _durationInMinutes - длительность голосования в минутах (от момента деплоя)
      */
-    function setGreeting(string memory _newGreeting) public payable {
-        // Print data to the hardhat chain console. Remove when deploying to a live network.
-        console.log("Setting new greeting '%s' from %s", _newGreeting, msg.sender);
+    constructor(string[] memory _candidateNames, uint256 _durationInMinutes) {
+        owner = msg.sender;
+        votingStart = block.timestamp;
+        votingEnd = block.timestamp + (_durationInMinutes * 1 minutes);
 
-        // Change state variables
-        greeting = _newGreeting;
-        totalCounter += 1;
-        userGreetingCounter[msg.sender] += 1;
-
-        // msg.value: built-in global variable that represents the amount of ether sent with the transaction
-        if (msg.value > 0) {
-            premium = true;
-        } else {
-            premium = false;
+        for (uint256 i = 0; i < _candidateNames.length; i++) {
+            candidates.push(Candidate({name: _candidateNames[i], voteCount: 0}));
         }
 
-        // emit: keyword used to trigger an event
-        emit GreetingChange(msg.sender, _newGreeting, msg.value > 0, msg.value);
+        console.log("YourContract deployed by", msg.sender);
     }
 
-    /**
-     * Function that allows the owner to withdraw all the Ether in the contract
-     * The function can only be called by the owner of the contract as defined by the isOwner modifier
-     */
-    function withdraw() public isOwner {
-        (bool success, ) = owner.call{ value: address(this).balance }("");
-        require(success, "Failed to send Ether");
+    function addCandidate(string memory _name) public onlyOwner {
+        candidates.push(Candidate({name: _name, voteCount: 0}));
+        emit CandidateAdded(_name);
     }
 
-    /**
-     * Function that allows the contract to receive ETH
-     */
+    function vote(uint256 _candidateIndex) public {
+        require(block.timestamp >= votingStart, "Voting has not started");
+        require(block.timestamp < votingEnd, "Voting has ended");
+        require(!voters[msg.sender], "You have already voted.");
+        require(_candidateIndex < candidates.length, "Invalid candidate index.");
+
+        candidates[_candidateIndex].voteCount += 1;
+        voters[msg.sender] = true;
+
+        emit VoteCast(msg.sender, _candidateIndex);
+    }
+
+    /// Возвращает всех кандидатов (имя + кол-во голосов)
+    function getAllCandidates() public view returns (Candidate[] memory) {
+        return candidates;
+    }
+
+    function getCandidatesCount() public view returns (uint256) {
+        return candidates.length;
+    }
+
+    /// true — если текущее время внутри окна голосования
+    function getVotingStatus() public view returns (bool) {
+        return block.timestamp >= votingStart && block.timestamp < votingEnd;
+    }
+
+    /// сколько секунд осталось до окончания (0 если уже окончено)
+    function getRemainingTime() public view returns (uint256) {
+        if (block.timestamp < votingStart) {
+            // ещё не началось — возвращаем оставшееся до старта
+            return votingStart - block.timestamp;
+        }
+        if (block.timestamp >= votingEnd) {
+            return 0;
+        }
+        return votingEnd - block.timestamp;
+    }
+
+    // Для возможности отправить ETH на контракт
     receive() external payable {}
 }
